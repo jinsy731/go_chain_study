@@ -10,7 +10,9 @@ import (
 func main() {
 	bc := core.NewBlockchain()
 
+	fmt.Println("Adding first block...")
 	bc.AddBlock("Send 1 BTC to Zin")
+	fmt.Println("Adding second block...")
 	bc.AddBlock("Send 2 BTC to Kim")
 
 	for _, block := range bc.Blocks {

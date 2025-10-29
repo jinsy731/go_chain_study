@@ -43,7 +43,7 @@ func NewBlock(data string, prevBlockHash []byte) *Block {
 		Nonce:         0,
 	}
 
-	block.SetHash()
+	// block.SetHash() // Hash는 PoW의 결과로 계산됨
 	return block
 }
 
