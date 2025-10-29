@@ -3,6 +3,8 @@ package core
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/gob"
+	"log"
 	"time"
 )
 
@@ -65,4 +67,30 @@ func (b *Block) HashTransactions() []byte {
 	txHash = sha256.Sum256(bytes.Join(txHashes, []byte{}))
 
 	return txHash[:]
+}
+
+// 블록을 []byte로 직렬화
+func (b *Block) Serialize() []byte {
+	var encoded bytes.Buffer
+	enc := gob.NewEncoder(&encoded)
+
+	err := enc.Encode(b)
+	if err != nil {
+		log.Panic(err)
+	}
+
+	return encoded.Bytes()
+}
+
+// []byte를 Block 포인터로 역직렬화
+func DeserializeBlock(bs []byte) *Block {
+	var block Block
+	dec := gob.NewDecoder(bytes.NewReader(bs))
+
+	err := dec.Decode(&block)
+	if err != nil {
+		log.Panic(err)
+	}
+
+	return &block
 }

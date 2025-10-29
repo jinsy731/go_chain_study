@@ -29,6 +29,12 @@ type Transaction struct {
 	VOut []*TXOutput // 출력 목록
 }
 
+func init() {
+	gob.Register(&Transaction{})
+	gob.Register(&TXInput{})
+	gob.Register(&TXOutput{})
+}
+
 // 트랜잭션의 해시 ID를 계산하고 설정
 func (tx *Transaction) SetID() {
 	var encoded bytes.Buffer
