@@ -28,8 +28,6 @@ func NewProofOfWork(b *Block) *ProofOfWork {
 	// targetBits만큼 왼쪽으로 시프트
 	target.Lsh(target, uint(256-targetBits))
 
-	fmt.Printf("target: %b\n", target)
-
 	pow := &ProofOfWork{b, target}
 	return pow
 }
@@ -40,7 +38,7 @@ func (pow *ProofOfWork) prepareData(nonce int) []byte {
 	data := bytes.Join(
 		[][]byte{
 			pow.block.PrevBlockHash,
-			pow.block.Data,
+			pow.block.HashTransactions(),
 			[]byte(strconv.FormatInt(pow.block.Timestamp, 10)),
 			[]byte(strconv.FormatInt(int64(targetBits), 10)),
 			[]byte(strconv.FormatInt(int64(nonce), 10)),
@@ -55,7 +53,7 @@ func (pow *ProofOfWork) Run() (int, []byte) {
 	var hash [32]byte
 	nonce := 0
 
-	fmt.Printf(`Mining the block containing "%s"\n`, pow.block.Data)
+	fmt.Printf(`Mining the block...`)
 
 	for nonce < maxNonce {
 		// nonce를 설정하여 데이터 준비
@@ -77,7 +75,6 @@ func (pow *ProofOfWork) Run() (int, []byte) {
 			fmt.Printf("\rHashing... %d (Target bits: %d)", nonce, targetBits)
 		}
 	}
-	fmt.Println("\n")
 
 	// 정답 논스와 해시를 반환
 	return nonce, hash[:]
