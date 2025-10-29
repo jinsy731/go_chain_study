@@ -1,0 +1,28 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Build and release directories
+bin/
+build/
+dist/
+
+# Coverage and profiling data
+*.cover
+*.cov
+*.profile
+*.prof
+coverage.out
+
+# Workspace and dependency directories
+vendor/
+
+# IDE and OS metadata
+.idea/
+.vscode/
+.DS_Store
