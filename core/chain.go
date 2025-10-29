@@ -69,7 +69,7 @@ func (bc *Blockchain) AddBlock(txs []*Transaction) {
 
 // 제네시스 블록으로 시작하는 새로운 블록체인 생성
 // DB를 열고, 체인이 없으면 제네시스 블록을 생성
-func NewBlockchain() *Blockchain {
+func NewBlockchain(address string) *Blockchain {
 	// DB 파일이 존재하는지 확인
 	// os.Stat으로 파일 상태정보를 가져옴. 파일이 없거나 접근할 수 없으면 error
 	// os.IsNotExist(err)는 error가 파일이 존재하지 않아 발생한 것인지를 확인
@@ -95,7 +95,7 @@ func NewBlockchain() *Blockchain {
 
 			// 코인베이스 트랜잭션 생성
 			// 아직 지갑이 없으므로 주소 대신 임시 문자열을 지정
-			cbtx := NewCoinbaseTX("GenesisOwner", genesisCoinbaseData)
+			cbtx := NewCoinbaseTX(address, genesisCoinbaseData)
 			genesisBlock := NewGenesisBlock(cbtx)
 
 			// PoW

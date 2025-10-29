@@ -6,21 +6,26 @@ import (
 	"encoding/gob"
 	"fmt"
 	"log"
+
+	"github.com/mr-tron/base58"
 )
 
 const subsidy = 10 // 구현 간소화를 위해 10으로 고정
 
 // 거래의 출력 (누가 얼마를 받았는가)
 type TXOutput struct {
-	Value        int
-	ScriptPubKey string // 수신자의 주소 (잠금 스크립트, 지금은 간단히 문자열로 함)
+	Value      int
+	PubKeyHash []byte // 주소에서 파생된 PubKeyHash로 잠금
+	// ScriptPubKey string // 수신자의 주소 (잠금 스크립트, 지금은 간단히 문자열로 함)
 }
 
 // 거래의 입력 (과거의 어떤 돈을 쓸 것인가)
 type TXInput struct {
 	Txid      []byte // 참조할 과거 트랜잭션 ID
 	Vout      int    // 참조할 과거 트랜잭션의 Output 인덱스
-	ScriptSig string // 서명 (잠금 해제 스크립트, 지금은 간단히 문자열로 함)
+	Signature []byte // 실제 서명
+	PubKey    []byte // 서명 검증에 사용할 공개키
+	// ScriptSig string // 서명 (잠금 해제 스크립트, 지금은 간단히 문자열로 함)
 }
 
 type Transaction struct {
@@ -68,16 +73,11 @@ func NewCoinbaseTX(to, data string) *Transaction {
 
 	// 코인베이스는 참조할 Output이 없으므로, Txid=nil, Vout=-1
 	txin := &TXInput{
-		Txid:      nil,
-		Vout:      -1,
-		ScriptSig: data,
+		Txid: nil,
+		Vout: -1,
 	}
 
-	// 보상을 받는 사람에게 subsidy 만큼 지급
-	txout := &TXOutput{
-		Value:        subsidy,
-		ScriptPubKey: to,
-	}
+	txout := NewTXOutput(subsidy, to)
 
 	tx := &Transaction{
 		ID:   nil,
@@ -89,12 +89,31 @@ func NewCoinbaseTX(to, data string) *Transaction {
 	return tx
 }
 
-// ScriptSig가 ScriptPubKey를 해제할 수 있는지 확인
-func (in *TXInput) CanUnlockOutputWith(unlockingData string) bool {
-	return in.ScriptSig == unlockingData
+// 금액과 주소를 받아 새 TXOutput 생성
+// 주소를 통해 잠금
+func NewTXOutput(value int, address string) *TXOutput {
+	txo := &TXOutput{value, nil}
+	//
+	txo.Lock([]byte(address))
+	return txo
 }
 
-// ScriptPubKey가 unlockingData로 해제될 수 있는지 확인
-func (out *TXOutput) CanBeUnlockedWith(unlockingData string) bool {
-	return out.ScriptPubKey == unlockingData
+func (out *TXOutput) Lock(address []byte) {
+	// Base58 디코딩
+	pubKeyHash, err := base58.Decode(string(address))
+	if err != nil {
+		log.Panic(err)
+	}
+	// 체크섬(4바이트)와 버전(1바이트)를 제외하고 실제 PubKeyHash(20바이트)만 추출
+	pubKeyHash = pubKeyHash[1 : len(pubKeyHash)-addressChecksumLen]
+	out.PubKeyHash = pubKeyHash
+}
+
+func (out *TXOutput) IsLockedWithKey(pubKeyHash []byte) bool {
+	return bytes.Equal(out.PubKeyHash, pubKeyHash)
+}
+
+func (in *TXInput) UsesKey(pubKeyHash []byte) bool {
+	lockingHash := HashPubKey(in.PubKey)
+	return bytes.Equal(lockingHash, pubKeyHash)
 }
