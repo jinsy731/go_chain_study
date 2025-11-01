@@ -1,6 +1,7 @@
 package core
 
 import (
+	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
@@ -83,6 +84,30 @@ func NewBlockchain(address string) *Blockchain {
 	}
 
 	var tip []byte
+	err = db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(blocksBucket))
+		tip = b.Get([]byte("l"))
+		return nil
+	})
+	if err != nil {
+		log.Panic(err)
+	}
+	// DB 인스턴스와 tip을 가진 Blockchain 구조체 포인터 반환
+	return &Blockchain{tip, db}
+}
+
+func CreateBlockchain(address string) *Blockchain {
+	if _, err := os.Stat(dbFile); !os.IsNotExist(err) {
+		fmt.Println("Blockchain already exists.")
+		os.Exit(1)
+	}
+
+	db, err := bbolt.Open(dbFile, 0600, &bbolt.Options{Timeout: 1 * time.Second})
+	if err != nil {
+		log.Panic(err)
+	}
+
+	var tip []byte
 
 	// DB 트랜잭션 (Update = R/W)
 	err = db.Update(func(tx *bbolt.Tx) error {
@@ -136,6 +161,60 @@ func NewBlockchain(address string) *Blockchain {
 
 	// DB 인스턴스와 tip을 가진 Blockchain 구조체 포인터 반환
 	return &Blockchain{tip, db}
+}
+
+// 전체 블록체인을 스캔하여 현재의 UTXO Map을 반환
+func (bc *Blockchain) FindAllUTXO() map[string][]*TXOutput {
+	UTXO := make(map[string][]*TXOutput)
+	// key: txID, value: 사용된 Output 인덱스
+	spentTXOs := make(map[string][]int)
+
+	bci := bc.Iterator()
+
+	// 블록을 순회
+	for {
+		block := bci.Next()
+
+		// 블록 안의 트랜잭션을 순회
+		for _, tx := range block.Transactions {
+			txID := hex.EncodeToString(tx.ID)
+
+		OutputsLoop:
+			// 트랜잭션 안의 Outputs를 순회
+			for outIdx, out := range tx.VOut {
+				// txID의 Outputs 중 사용된 Output이 있는 경우
+				if spentTXOs[txID] != nil {
+					// 해당 txID의 Outputs를 순회하며, 이미 사용된 Output인 경우 아래 과정을 Skip (UTXO 맵에 저장하는 과정을 스킵)
+					for _, spentOutIdx := range spentTXOs[txID] {
+						if spentOutIdx == outIdx {
+							continue OutputsLoop
+						}
+					}
+				}
+
+				// 사용되지 않았다면, UTXO 맵에 추가
+				outs := UTXO[txID]
+				outs = append(outs, out)
+				UTXO[txID] = outs
+			}
+
+			// Inputs을 순회하며 사용된 Output을 찾아서 spentTXOs 에 추가
+			// Coinbase 트랜잭션이 아닌 경우에만 사용된 Input이 있음.
+			if !tx.IsCoinbase() {
+				for _, in := range tx.Vin {
+					inTxID := hex.EncodeToString(in.Txid)
+					spentTXOs[inTxID] = append(spentTXOs[inTxID], in.Vout)
+				}
+			}
+		}
+
+		// 더 이상 순회할 블록이 없으면 for loop break
+		if len(block.PrevBlockHash) == 0 {
+			break
+		}
+	}
+
+	return UTXO
 }
 
 // DB 연결 종료
