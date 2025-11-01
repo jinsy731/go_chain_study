@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/gob"
+	"encoding/hex"
 	"fmt"
 	"log"
 
+	"github.com/btcsuite/btcd/btcec/v2"
+	ecdsa "github.com/btcsuite/btcd/btcec/v2/ecdsa"
 	"github.com/mr-tron/base58"
 )
 
@@ -116,4 +119,107 @@ func (out *TXOutput) IsLockedWithKey(pubKeyHash []byte) bool {
 func (in *TXInput) UsesKey(pubKeyHash []byte) bool {
 	lockingHash := HashPubKey(in.PubKey)
 	return bytes.Equal(lockingHash, pubKeyHash)
+}
+
+// 트랜잭션에 서명
+func (tx *Transaction) Sign(privKey *btcec.PrivateKey, prevTXs map[string]*Transaction) {
+	// 코인베이스 트랜잭션은 서명하지 않음
+	if tx.IsCoinbase() {
+		return
+	}
+
+	// 입력(Input)에 사용된 이전 트랜잭션(prevTX)이 유효한지 확인
+	for _, vin := range tx.Vin {
+		if prevTXs[hex.EncodeToString(vin.Txid)] == nil {
+			log.Panic("ERROR: Previous transaction is not found")
+		}
+	}
+
+	// 서명을 위한 복사본 생성
+	txCopy := tx.TrimmedCopy()
+	// 각 Input에 대해 서명 생성
+	for inID, vin := range txCopy.Vin {
+		prevTx := prevTXs[hex.EncodeToString(vin.Txid)]
+
+		// ScriptSig를 비우고, 참조할 Output의 PubKeyHash로 채움
+		// 이것이 서명할 "데이터"
+		txCopy.Vin[inID].Signature = nil
+		txCopy.Vin[inID].PubKey = prevTx.VOut[vin.Vout].PubKeyHash
+
+		// 트랜잭션 복사본을 해시 (이것이 서명할 대상)
+		txCopy.SetID() // SetID()는 해시 계산기 역할을 함
+		dataToSign := txCopy.ID
+
+		// 서명. btcec ecdsa 패키지가 deterministic ECDSA 서명을 제공
+		signature := ecdsa.Sign(privKey, dataToSign)
+
+		// 서명을 DER 인코딩된 바이트로 변환하여 저장
+		tx.Vin[inID].Signature = signature.Serialize()
+
+		// 서명 후 다시 PubKey를 비움
+		txCopy.Vin[inID].PubKey = nil
+
+		// 원본 트랜잭션의 Input에 서명과 공개키를 저장
+		tx.Vin[inID].Signature = signature.Serialize()
+		tx.Vin[inID].PubKey = privKey.PubKey().SerializeCompressed()
+	}
+}
+
+// 서명을 위해 트랜잭션 복사본 생성
+func (tx *Transaction) TrimmedCopy() *Transaction {
+	var inputs []*TXInput
+
+	for _, vin := range tx.Vin {
+		// Signature와 PubKey가 비워진 Input 복사본
+		inputs = append(inputs, &TXInput{Txid: vin.Txid, Vout: vin.Vout, Signature: nil, PubKey: nil})
+	}
+
+	return &Transaction{
+		ID:   tx.ID,
+		Vin:  inputs,
+		VOut: tx.VOut,
+	}
+}
+
+func (tx *Transaction) Verify(prevTXs map[string]*Transaction) bool {
+	// 코인베이스 트랜잭션은 서명을 하지 않으므로 검증도 필요없음
+	if tx.IsCoinbase() {
+		return true
+	}
+
+	for _, vin := range tx.Vin {
+		if prevTXs[hex.EncodeToString(vin.Txid)] == nil {
+			log.Panic("ERROR: Previous transaction is not found")
+		}
+	}
+
+	txCopy := tx.TrimmedCopy()
+
+	for inID, vin := range tx.Vin {
+		prevTx := prevTXs[hex.EncodeToString(vin.Txid)]
+
+		txCopy.Vin[inID].Signature = nil
+		txCopy.Vin[inID].PubKey = prevTx.VOut[vin.Vout].PubKeyHash
+		txCopy.SetID()
+		dataToVerify := txCopy.ID
+		txCopy.Vin[inID].PubKey = nil
+
+		// 서명을 []byte -> ecdsa.Signature로 역직렬화
+		signature, err := ecdsa.ParseSignature(vin.Signature)
+		if err != nil {
+			log.Panic(err)
+		}
+
+		// 공개키를 []byte -> btcec.PublicKey로 역직렬화
+		pubKey, err := btcec.ParsePubKey(vin.PubKey)
+		if err != nil {
+			log.Panic(err)
+		}
+
+		if !signature.Verify(dataToVerify, pubKey) {
+			return false
+		}
+	}
+
+	return true
 }

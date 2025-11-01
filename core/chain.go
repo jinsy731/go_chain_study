@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"encoding/hex"
 	"fmt"
 	"log"
@@ -19,7 +20,17 @@ type Blockchain struct {
 	db  *bbolt.DB
 }
 
+// 블록체인에 블록을 추가
+// 블록에 포함될 트랜잭션 검증
+// UTXO Set 업데이트
 func (bc *Blockchain) AddBlock(txs []*Transaction) {
+	// 트랜잭션 검증
+	for _, tx := range txs {
+		if !bc.VerifyTransaction(tx) {
+			log.Panic("ERROR: Invalid transaction found in block")
+		}
+	}
+
 	var lastHash []byte
 
 	// DB에서 마지막 블록 해시(tip)를 가져옴 (read-only transaction: view)
@@ -38,9 +49,9 @@ func (bc *Blockchain) AddBlock(txs []*Transaction) {
 	// Proof Of Work
 	pow := NewProofOfWork(newBlock)
 	nonce, hash := pow.Run()
-
 	newBlock.Nonce = nonce
 	newBlock.Hash = hash
+
 	// 체인에 새 블록 추가 (DB에 새 블록 저장)
 	// 새 블록 저장과 l키 업데이트는 원자적으로 이루어져야 함(같은 bbolt tx 내에서 작업)
 	err = bc.db.Update(func(tx *bbolt.Tx) error {
@@ -65,12 +76,17 @@ func (bc *Blockchain) AddBlock(txs []*Transaction) {
 	if err != nil {
 		log.Panic(err)
 	}
+
+	// UTXO Set 업데이트
+	utxoSet := UTXOSet{bc}
+	utxoSet.Update(newBlock)
+
 	fmt.Println("Successfully added a new block!")
 }
 
 // 제네시스 블록으로 시작하는 새로운 블록체인 생성
 // DB를 열고, 체인이 없으면 제네시스 블록을 생성
-func NewBlockchain(address string) *Blockchain {
+func NewBlockchain() *Blockchain {
 	// DB 파일이 존재하는지 확인
 	// os.Stat으로 파일 상태정보를 가져옴. 파일이 없거나 접근할 수 없으면 error
 	// os.IsNotExist(err)는 error가 파일이 존재하지 않아 발생한 것인지를 확인
@@ -215,6 +231,102 @@ func (bc *Blockchain) FindAllUTXO() map[string][]*TXOutput {
 	}
 
 	return UTXO
+}
+
+func (bc *Blockchain) NewTransaction(from, to string, amount int) (*Transaction, error) {
+	// from 지갑 로드 (서명을 하기 위해)
+	wallets, err := NewWallets()
+	if err != nil {
+		log.Panic(err)
+	}
+	wallet := wallets.GetWallet(from)
+	pubKeyHash := HashPubKey(wallet.PublicKey)
+
+	// 사용할 수 있는 UTXO 찾기
+	utxoSet := UTXOSet{bc}
+	accumulated, spendableOutputs := utxoSet.FindSpendableOutputs(pubKeyHash, amount)
+
+	if accumulated < amount {
+		return nil, fmt.Errorf("Not enough funds. Balance: %d, Required: %d", accumulated, amount)
+	}
+
+	// 찾은 UTXO를 Input으로 변환
+	var inputs []*TXInput
+	for txIDHex, outIdxs := range spendableOutputs {
+		txID, err := hex.DecodeString(txIDHex)
+		if err != nil {
+			log.Panic(err)
+		}
+		for _, outIdx := range outIdxs {
+			inputs = append(inputs, &TXInput{
+				Txid:      txID,
+				Vout:      outIdx,
+				Signature: nil,
+				PubKey:    wallet.PublicKey,
+			})
+		}
+	}
+
+	// Outputs 생성 (받는 사람, 거스름돈)
+	var outputs []*TXOutput
+	outputs = append(outputs, NewTXOutput(amount, to))
+	// 거스름돈
+	if accumulated > amount {
+		outputs = append(outputs, NewTXOutput(accumulated-amount, from))
+	}
+
+	// 트랜잭션 생성
+	tx := &Transaction{ID: nil, Vin: inputs, VOut: outputs}
+	tx.SetID()
+
+	// 서명
+	prevTXs := bc.FindReferencedTransaction(tx)
+	tx.Sign(wallet.PrivateKey, prevTXs)
+
+	return tx, nil
+}
+
+// Input이 참조하는 트랜잭션들을 DB에서 조회
+func (bc *Blockchain) FindReferencedTransaction(tx *Transaction) map[string]*Transaction {
+	prevTXs := make(map[string]*Transaction)
+
+	for _, vin := range tx.Vin {
+		prevTX, err := bc.FindTransaction(vin.Txid)
+		if err != nil {
+			log.Panic(err)
+		}
+		prevTXs[hex.EncodeToString(prevTX.ID)] = prevTX
+	}
+	return prevTXs
+}
+
+// 전체 블록을 스캔하여 특정 txID 찾기
+// 비효율적이지만, 추후 인덱스를 추가하여 개선 예정
+func (bc *Blockchain) FindTransaction(txID []byte) (*Transaction, error) {
+	bcIter := bc.Iterator()
+
+	for {
+		block := bcIter.Next()
+		for _, tx := range block.Transactions {
+			if bytes.Equal(txID, tx.ID) {
+				return tx, nil
+			}
+		}
+		if len(block.PrevBlockHash) == 0 {
+			break
+		}
+	}
+	return nil, fmt.Errorf("Transaction %s not found", hex.EncodeToString(txID))
+}
+
+// 트랜잭션 검증
+// AddBlock 할 때 실행하여 블록의 트랜잭션을 검증
+func (bc *Blockchain) VerifyTransaction(tx *Transaction) bool {
+	if tx.IsCoinbase() {
+		return true
+	}
+	prevTXs := bc.FindReferencedTransaction(tx)
+	return tx.Verify(prevTXs)
 }
 
 // DB 연결 종료

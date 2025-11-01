@@ -26,3 +26,7 @@ vendor/
 .idea/
 .vscode/
 .DS_Store
+
+# Local blockchain data
+blockchain.db
+wallet.dat
