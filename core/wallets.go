@@ -10,7 +10,7 @@ import (
 	"github.com/btcsuite/btcd/btcec/v2"
 )
 
-const walletFile = "wallet.dat"
+const walletFileFormat = "wallet_%s.dat"
 
 type Wallets struct {
 	Wallets map[string]*Wallet // key: address
@@ -22,7 +22,8 @@ type walletRecord struct {
 }
 
 // wallet.dat 파일에서 지갑들을 불러옴(Load)
-func NewWallets() (*Wallets, error) {
+func NewWallets(port string) (*Wallets, error) {
+	walletFile := fmt.Sprintf(walletFileFormat, port)
 	// wallet.dat 파일이 있는지 확인하고 없으면, 새로운 Wallets 구조체를 반환
 	if _, err := os.Stat(walletFile); os.IsNotExist(err) {
 		wallets := &Wallets{}
@@ -76,7 +77,9 @@ func (ws *Wallets) GetWallet(address string) Wallet {
 }
 
 // 지갑 맵을 파일에 GOB으로 저장(Save)
-func (ws *Wallets) SaveToFile() {
+func (ws *Wallets) SaveToFile(port string) {
+	walletFile := fmt.Sprintf(walletFileFormat, port)
+
 	var content bytes.Buffer
 
 	if ws.Wallets == nil {

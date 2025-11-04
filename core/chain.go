@@ -11,13 +11,38 @@ import (
 	"go.etcd.io/bbolt"
 )
 
-const dbFile = "blockchain.db"
+const dbFileFormat = "blockchain_%s.db"
 const blocksBucket = "blocksBucket"
-const genesisCoinbaseData = "The Times 03/Jan/2009 Chancellor on brink of second bailout for banks"
 
 type Blockchain struct {
 	tip []byte // 마지막 블록의 해시
 	db  *bbolt.DB
+}
+
+// 제네시스 블록을 고정돤 값으로 생성
+// 노드별로 제네시스 블록을 생성하지 않고, 고정된 값을 사용. PoW 실행 없음.
+func createGenesisBlock() *Block {
+	const genesisRewardAddress = "1NAf8sFhcm2L2vjF1Yc1sMpHgXUaA7dGjN"
+	const genesisCoinbaseData = "The Times 03/Jan/2009 Chancellor on brink of second bailout for banks"
+
+	const genesisTimestamp = 1231006505
+	const genesisNonce = 169686
+	const genesisHash = "0000f9433df7947fe24d253e0c163649fa2108ad1022005baee6e32997a972be"
+
+	// 3. 트랜잭션 생성
+	cbtx := NewCoinbaseTX(genesisRewardAddress, genesisCoinbaseData)
+
+	// 4. 완성된 블록 객체 생성 (PoW 실행 없음!)
+	genesis := &Block{
+		Timestamp:     genesisTimestamp,
+		Transactions:  []*Transaction{cbtx},
+		PrevBlockHash: []byte{},
+		Nonce:         genesisNonce,
+		// Hash: (hex 디코딩 필요)
+	}
+	genesis.Hash, _ = hex.DecodeString(genesisHash)
+
+	return genesis
 }
 
 // 블록체인에 블록을 추가
@@ -86,10 +111,11 @@ func (bc *Blockchain) AddBlock(txs []*Transaction) {
 
 // 제네시스 블록으로 시작하는 새로운 블록체인 생성
 // DB를 열고, 체인이 없으면 제네시스 블록을 생성
-func NewBlockchain() *Blockchain {
+func NewBlockchain(port string) *Blockchain {
 	// DB 파일이 존재하는지 확인
 	// os.Stat으로 파일 상태정보를 가져옴. 파일이 없거나 접근할 수 없으면 error
 	// os.IsNotExist(err)는 error가 파일이 존재하지 않아 발생한 것인지를 확인
+	dbFile := fmt.Sprintf(dbFileFormat, port)
 	if _, err := os.Stat(dbFile); os.IsNotExist(err) {
 		fmt.Println("Blockchain database not found. Creating new one...")
 	}
@@ -100,50 +126,13 @@ func NewBlockchain() *Blockchain {
 	}
 
 	var tip []byte
-	err = db.View(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(blocksBucket))
-		tip = b.Get([]byte("l"))
-		return nil
-	})
-	if err != nil {
-		log.Panic(err)
-	}
-	// DB 인스턴스와 tip을 가진 Blockchain 구조체 포인터 반환
-	return &Blockchain{tip, db}
-}
-
-func CreateBlockchain(address string) *Blockchain {
-	if _, err := os.Stat(dbFile); !os.IsNotExist(err) {
-		fmt.Println("Blockchain already exists.")
-		os.Exit(1)
-	}
-
-	db, err := bbolt.Open(dbFile, 0600, &bbolt.Options{Timeout: 1 * time.Second})
-	if err != nil {
-		log.Panic(err)
-	}
-
-	var tip []byte
-
-	// DB 트랜잭션 (Update = R/W)
 	err = db.Update(func(tx *bbolt.Tx) error {
-		// 버킷(테이블) 가져오기
 		b := tx.Bucket([]byte(blocksBucket))
 
 		// 버킷이 없으면
 		if b == nil {
 			fmt.Println("No existing blockchain found. Creating Genesis Block...")
-
-			// 코인베이스 트랜잭션 생성
-			// 아직 지갑이 없으므로 주소 대신 임시 문자열을 지정
-			cbtx := NewCoinbaseTX(address, genesisCoinbaseData)
-			genesisBlock := NewGenesisBlock(cbtx)
-
-			// PoW
-			pow := NewProofOfWork(genesisBlock)
-			nonce, hash := pow.Run()
-			genesisBlock.Hash = hash
-			genesisBlock.Nonce = nonce
+			genesisBlock := createGenesisBlock()
 
 			b, err := tx.CreateBucket([]byte(blocksBucket))
 			if err != nil {
@@ -170,11 +159,9 @@ func CreateBlockchain(address string) *Blockchain {
 		}
 		return nil
 	})
-
 	if err != nil {
 		log.Panic(err)
 	}
-
 	// DB 인스턴스와 tip을 가진 Blockchain 구조체 포인터 반환
 	return &Blockchain{tip, db}
 }
@@ -233,9 +220,9 @@ func (bc *Blockchain) FindAllUTXO() map[string][]*TXOutput {
 	return UTXO
 }
 
-func (bc *Blockchain) NewTransaction(from, to string, amount int) (*Transaction, error) {
+func (bc *Blockchain) NewTransaction(from, to, port string, amount int) (*Transaction, error) {
 	// from 지갑 로드 (서명을 하기 위해)
-	wallets, err := NewWallets()
+	wallets, err := NewWallets(port)
 	if err != nil {
 		log.Panic(err)
 	}
