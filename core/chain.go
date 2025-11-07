@@ -26,8 +26,8 @@ func createGenesisBlock() *Block {
 	const genesisCoinbaseData = "The Times 03/Jan/2009 Chancellor on brink of second bailout for banks"
 
 	const genesisTimestamp = 1231006505
-	const genesisNonce = 169686
-	const genesisHash = "0000f9433df7947fe24d253e0c163649fa2108ad1022005baee6e32997a972be"
+	const genesisNonce = 80958
+	const genesisHash = "00008b6c2fcc61782750b01fa168436a21e75cedc22eb8f258f3e2e7ab8100dc"
 
 	// 3. 트랜잭션 생성
 	cbtx := NewCoinbaseTX(genesisRewardAddress, genesisCoinbaseData)
@@ -48,53 +48,42 @@ func createGenesisBlock() *Block {
 // 블록체인에 블록을 추가
 // 블록에 포함될 트랜잭션 검증
 // UTXO Set 업데이트
-func (bc *Blockchain) AddBlock(txs []*Transaction) {
+func (bc *Blockchain) AddBlock(block *Block) error {
+
+	lastHeight := bc.GetBestHeight()
+
 	// 트랜잭션 검증
-	for _, tx := range txs {
+	for _, tx := range block.Transactions {
 		if !bc.VerifyTransaction(tx) {
 			log.Panic("ERROR: Invalid transaction found in block")
 		}
 	}
 
-	var lastHash []byte
-
-	// DB에서 마지막 블록 해시(tip)를 가져옴 (read-only transaction: view)
-	err := bc.db.View(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(blocksBucket))
-		lastHash = b.Get([]byte("l"))
-		return nil
-	})
-	if err != nil {
-		log.Panic(err)
+	// 블록 높이 검증
+	if block.Height != lastHeight+1 {
+		return fmt.Errorf("Invalid block height. Expected %d, got %d", lastHeight+1, block.Height)
 	}
 
-	// 새 블록 생성
-	newBlock := NewBlock(txs, lastHash)
-
-	// Proof Of Work
-	pow := NewProofOfWork(newBlock)
-	nonce, hash := pow.Run()
-	newBlock.Nonce = nonce
-	newBlock.Hash = hash
+	// Proof Of Work 검증
+	if isValid := NewProofOfWork(block).Validate(); !isValid {
+		return fmt.Errorf("Invalid PoW")
+	}
 
 	// 체인에 새 블록 추가 (DB에 새 블록 저장)
 	// 새 블록 저장과 l키 업데이트는 원자적으로 이루어져야 함(같은 bbolt tx 내에서 작업)
-	err = bc.db.Update(func(tx *bbolt.Tx) error {
+	err := bc.db.Update(func(tx *bbolt.Tx) error {
 		b := tx.Bucket([]byte(blocksBucket))
 
 		// 새 블록 저장
-		err := b.Put(newBlock.Hash, newBlock.Serialize())
-		if err != nil {
+		if err := b.Put(block.Hash, block.Serialize()); err != nil {
 			return err
 		}
-
 		// "l"키를 새 블록의 해시로 업데이트 (마지막 블록 해시 업데이트)
-		err = b.Put([]byte("l"), newBlock.Hash)
-		if err != nil {
+		if err := b.Put([]byte("l"), block.Hash); err != nil {
 			return err
 		}
 
-		bc.tip = newBlock.Hash
+		bc.tip = block.Hash
 		return nil
 	})
 
@@ -104,9 +93,10 @@ func (bc *Blockchain) AddBlock(txs []*Transaction) {
 
 	// UTXO Set 업데이트
 	utxoSet := UTXOSet{bc}
-	utxoSet.Update(newBlock)
+	utxoSet.Update(block)
 
 	fmt.Println("Successfully added a new block!")
+	return nil
 }
 
 // 제네시스 블록으로 시작하는 새로운 블록체인 생성
@@ -314,6 +304,62 @@ func (bc *Blockchain) VerifyTransaction(tx *Transaction) bool {
 	}
 	prevTXs := bc.FindReferencedTransaction(tx)
 	return tx.Verify(prevTXs)
+}
+
+// 최고 블록 높이 반환
+func (bc *Blockchain) GetBestHeight() int64 {
+	var lastBlock *Block
+
+	err := bc.db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(blocksBucket))
+		lastHash := b.Get([]byte("l"))
+		// 아직 tip이 설정되지 않은 경우
+		if lastHash == nil {
+			return fmt.Errorf("Tip hash not found")
+		}
+		lastBlock = DeserializeBlock(lastHash)
+
+		return nil
+	})
+	if err != nil {
+		log.Panic(err)
+	}
+
+	return lastBlock.Height
+}
+
+// 블록 해시 목록 반환 (역순)
+func (bc *Blockchain) GetBlockHashes() [][]byte {
+	var blockHashes [][]byte
+
+	bcIter := bc.Iterator()
+
+	for {
+		block := bcIter.Next()
+		blockHashes = append(blockHashes, block.Hash)
+		if len(block.PrevBlockHash) == 0 {
+			break
+		}
+	}
+
+	return blockHashes
+}
+
+func (bc *Blockchain) GetTipInfo() ([]byte, int64) {
+	var lastBlock *Block
+
+	err := bc.db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(blocksBucket))
+		lastHash := b.Get([]byte("l"))
+		blockData := b.Get(lastHash)
+		lastBlock = DeserializeBlock(blockData)
+		return nil
+	})
+	if err != nil {
+		log.Panic(err)
+	}
+
+	return lastBlock.Hash, lastBlock.Height
 }
 
 // DB 연결 종료

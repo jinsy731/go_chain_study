@@ -42,6 +42,7 @@ func (pow *ProofOfWork) prepareData(nonce int) []byte {
 			[]byte(strconv.FormatInt(pow.block.Timestamp, 10)),
 			[]byte(strconv.FormatInt(int64(targetBits), 10)),
 			[]byte(strconv.FormatInt(int64(nonce), 10)),
+			[]byte(strconv.FormatInt(pow.block.Height, 10)),
 		},
 		[]byte{},
 	)

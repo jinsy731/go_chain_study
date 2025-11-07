@@ -9,6 +9,7 @@ import (
 )
 
 type Block struct {
+	Height       int64
 	Timestamp    int64 // 블록 생성 시간
 	Transactions []*Transaction
 	// Data          []byte // 블록에 포함될 데이터 (여기서는 간단히 바이트 슬라이스로 구현)
@@ -37,9 +38,10 @@ type Block struct {
 // 	b.Hash = hash[:]
 // }
 
-func NewBlock(txs []*Transaction, prevBlockHash []byte) *Block {
+func NewBlock(txs []*Transaction, prevBlockHash []byte, height int64) *Block {
 	block := &Block{
 		Timestamp:     time.Now().Unix(),
+		Height:        height,
 		Transactions:  txs,
 		PrevBlockHash: prevBlockHash,
 		Hash:          []byte{},
@@ -51,7 +53,7 @@ func NewBlock(txs []*Transaction, prevBlockHash []byte) *Block {
 }
 
 func NewGenesisBlock(coinbaseTx *Transaction) *Block {
-	return NewBlock([]*Transaction{coinbaseTx}, []byte{})
+	return NewBlock([]*Transaction{coinbaseTx}, []byte{}, 1)
 }
 
 // 블록의 모든 트랜잭션을 묶어 해시

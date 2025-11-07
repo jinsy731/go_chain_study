@@ -136,9 +136,20 @@ func (cli *CLI) Run() {
 			log.Panic(err)
 		}
 
+		lastHash, lastHeight := bc.GetTipInfo()
+		block := NewBlock(
+			[]*Transaction{tx},
+			lastHash,
+			lastHeight+1,
+		)
+		pow := NewProofOfWork(block)
+		nonce, hash := pow.Run()
+		block.Hash = hash
+		block.Nonce = nonce
+
 		// 새 블록에 트랜잭션 추가
 		// 실제로는 Mempool에 추가되어야 하지만, 지금은 send가 즉시 새 블록을 채굴하도록 설정
-		bc.AddBlock([]*Transaction{tx})
+		bc.AddBlock(block)
 
 		fmt.Println("Transaction sent and mined successfully!")
 	}
