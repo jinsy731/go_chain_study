@@ -28,5 +28,8 @@ vendor/
 .DS_Store
 
 # Local blockchain data
-blockchain.db
-wallet.dat
+blockchain*.db
+wallet*.dat
+
+# Compiled binary
+go-chain-study
