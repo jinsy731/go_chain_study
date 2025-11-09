@@ -26,8 +26,8 @@ func createGenesisBlock() *Block {
 	const genesisCoinbaseData = "The Times 03/Jan/2009 Chancellor on brink of second bailout for banks"
 
 	const genesisTimestamp = 1231006505
-	const genesisNonce = 80958
-	const genesisHash = "00008b6c2fcc61782750b01fa168436a21e75cedc22eb8f258f3e2e7ab8100dc"
+	const genesisNonce = 196660
+	const genesisHash = "0000575fd1e289dbe9edfc719865b9b3a4e4f3fb938b6c5c7db7ddb26e3691e7"
 
 	// 3. 트랜잭션 생성
 	cbtx := NewCoinbaseTX(genesisRewardAddress, genesisCoinbaseData)

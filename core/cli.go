@@ -99,6 +99,9 @@ func (cli *CLI) Run() {
 			os.Exit(1)
 		}
 
+		log.Println("[startnode] port: ", *startnodePort)
+		log.Println("[startnode] miner: ", *startnodeMiner)
+
 		server := NewServer(*startnodePort, *startnodeMiner)
 		server.Start()
 	}

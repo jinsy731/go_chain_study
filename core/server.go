@@ -73,6 +73,7 @@ func NewServer(port string, minerAddress string) *Server {
 
 	// 블록체인 로드
 	bc := NewBlockchain(port)
+	UTXOSet{Blockchain: bc}.Reindex()
 
 	// 멤풀 생성
 	mempool := NewMempool()
@@ -304,12 +305,12 @@ func (s *Server) handleVersion(payload []byte) {
 }
 
 func (s *Server) sendTx(tx *Transaction, addr string) {
-	var txBytes bytes.Buffer
-	if err := gob.NewEncoder(&txBytes).Encode(tx); err != nil {
-		log.Panic(err)
+	txMsg := TxMsg{
+		AddrFrom:    s.nodeAddress,
+		Transaction: gobEncode(tx),
 	}
 
-	request := append(commandToBytes("tx"), txBytes.Bytes()...)
+	request := append(commandToBytes("tx"), gobEncode(txMsg)...)
 	sendData(addr, request)
 }
 
@@ -348,7 +349,9 @@ func (s *Server) handleTx(payload []byte) {
 }
 
 func (s *Server) broadcastTx(tx *Transaction, addrFrom string) {
+	log.Println("broadcasting tx..")
 	for node := range s.knownNodes {
+		log.Println(node, "is knownNodes")
 		// 나와 이 메시지를 보낸 노드를 제외하고 보내기
 		if node != s.nodeAddress && node != addrFrom {
 			s.sendTx(tx, node)
@@ -423,14 +426,17 @@ func (s *Server) handleInv(payload []byte) {
 	}
 
 	if inv.Type == "tx" {
-		// TODO
+		txHash := hex.EncodeToString(inv.Items[0])
+		if !s.mempool.Exists(txHash) {
+			s.sendGetData(inv.AddrFrom, "tx", inv.Items[0])
+		}
 	}
 }
 
 func (s *Server) sendGetBlocks(addr string) {
 	payload := gobEncode(GetBlocks{AddrFrom: s.nodeAddress})
 	request := append(commandToBytes("getblocks"), payload...)
-	sendData(addr, gobEncode(request))
+	sendData(addr, request)
 }
 
 func (s *Server) handleGetBlocks(payload []byte) {

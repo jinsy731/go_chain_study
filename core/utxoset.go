@@ -81,7 +81,7 @@ func (u UTXOSet) FindUTXOs(pubKeyHash []byte) []*TXOutput {
 	err := db.View(func(tx *bbolt.Tx) error {
 		b := tx.Bucket([]byte(utxoBucket))
 		if b == nil {
-			log.Panic("UTXO Bucket nof found. Please reindex.")
+			log.Panic("UTXO Bucket not found. Please reindex.")
 		}
 
 		c := b.Cursor() // 버킷을 순회하는 커서
@@ -169,40 +169,39 @@ func (u UTXOSet) Update(block *Block) {
 
 		// 사용된 Output을 UTXO Set에서 제거
 		for _, transaction := range block.Transactions {
-			if transaction.IsCoinbase() {
-				continue
-			}
+			if !transaction.IsCoinbase() {
 
-			for _, vin := range transaction.Vin {
-				remainingOuts := []*TXOutput{}
-				rawOuts := b.Get(vin.Txid)
-				var outs []*TXOutput
+				for _, vin := range transaction.Vin {
+					remainingOuts := []*TXOutput{}
+					rawOuts := b.Get(vin.Txid)
+					var outs []*TXOutput
 
-				if err := gob.NewDecoder(bytes.NewReader(rawOuts)).Decode(&outs); err != nil {
-					log.Panic(err)
-				}
-
-				// 사용된 Output(vin의 vout index와 일치하는 index의 output)을 제외한 Output 목록을 만듦
-				for outIdx, out := range outs {
-					if outIdx != vin.Vout {
-						remainingOuts = append(remainingOuts, out)
-					}
-				}
-
-				// 어떤 txID의 UTXO를 모두 소진한 경우
-				if len(remainingOuts) == 0 {
-					// 해당 txID를 Key로 하는 데이터를 UTXO 버킷에서 제거
-					if err := b.Delete(vin.Txid); err != nil {
+					if err := gob.NewDecoder(bytes.NewReader(rawOuts)).Decode(&outs); err != nil {
 						log.Panic(err)
 					}
-				} else { // 일부만 소진된 경우
-					var remainingOutsBin bytes.Buffer
-					if err := gob.NewEncoder(&remainingOutsBin).Encode(remainingOuts); err != nil {
-						log.Panic(err)
+
+					// 사용된 Output(vin의 vout index와 일치하는 index의 output)을 제외한 Output 목록을 만듦
+					for outIdx, out := range outs {
+						if outIdx != vin.Vout {
+							remainingOuts = append(remainingOuts, out)
+						}
 					}
-					// 남은 Output으로 덮어쓰기
-					if err := b.Put(vin.Txid, remainingOutsBin.Bytes()); err != nil {
-						log.Panic(err)
+
+					// 어떤 txID의 UTXO를 모두 소진한 경우
+					if len(remainingOuts) == 0 {
+						// 해당 txID를 Key로 하는 데이터를 UTXO 버킷에서 제거
+						if err := b.Delete(vin.Txid); err != nil {
+							log.Panic(err)
+						}
+					} else { // 일부만 소진된 경우
+						var remainingOutsBin bytes.Buffer
+						if err := gob.NewEncoder(&remainingOutsBin).Encode(remainingOuts); err != nil {
+							log.Panic(err)
+						}
+						// 남은 Output으로 덮어쓰기
+						if err := b.Put(vin.Txid, remainingOutsBin.Bytes()); err != nil {
+							log.Panic(err)
+						}
 					}
 				}
 			}

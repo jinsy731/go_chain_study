@@ -54,6 +54,15 @@ func (m *Mempool) GetTxs() []*Transaction {
 	return txs
 }
 
+func (m *Mempool) Exists(ID string) bool {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	_, ok := m.transactions[ID]
+
+	return ok
+}
+
 // 블록에 포함된 트랜잭션들을 멤풀에서 제거
 func (m *Mempool) Clear(block *Block) {
 	m.lock.Lock()

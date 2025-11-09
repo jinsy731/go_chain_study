@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
+	"strconv"
+	"time"
 
 	"github.com/btcsuite/btcd/btcec/v2"
 	ecdsa "github.com/btcsuite/btcd/btcec/v2/ecdsa"
@@ -71,13 +73,15 @@ func (tx *Transaction) IsCoinbase() bool {
 func NewCoinbaseTX(to, data string) *Transaction {
 	// 코인베이스 트랜잭션의 데이터는 자유롭게 생성
 	if data == "" {
-		data = fmt.Sprintf("Reward to '%s'", to)
+		data = fmt.Sprintf("Tx created at '%s', Reward to '%s'", strconv.FormatInt(time.Now().UnixNano(), 10), to)
 	}
 
+	log.Println("coinbase tx data: ", data)
 	// 코인베이스는 참조할 Output이 없으므로, Txid=nil, Vout=-1
 	txin := &TXInput{
-		Txid: nil,
-		Vout: -1,
+		Txid:      nil,
+		Vout:      -1,
+		Signature: []byte(data),
 	}
 
 	txout := NewTXOutput(subsidy, to)
@@ -88,6 +92,7 @@ func NewCoinbaseTX(to, data string) *Transaction {
 		VOut: []*TXOutput{txout},
 	}
 	tx.SetID()
+	log.Println("Coinbase TX ID: ", hex.EncodeToString(tx.ID))
 
 	return tx
 }

@@ -59,27 +59,18 @@ func (s *Server) startRPCListener() {
 func (s *Server) handleRPCConnection(conn net.Conn) {
 	defer conn.Close()
 
-	request := make([]byte, 0, 4096) // 4KB 버퍼
-	tmp := make([]byte, 256)
-
-	// conn으로부터 데이터 읽어들이기
-	for {
-		n, err := conn.Read(tmp) // n: 읽어들인 바이트 수
-		if err != nil {
-			// EOF Error 인 경우에는 에러로 처리할 필요없고, 그 외에만 에러로 처리
-			if err != io.EOF {
-				log.Panic(err)
-			}
-			break
+	var req RPCRequest
+	if err := gob.NewDecoder(conn).Decode(&req); err != nil {
+		if err != io.EOF {
+			log.Printf("Failed to decode RPC request: %v\n", err)
 		}
-		request = append(request, tmp[:n]...)
+		return
 	}
 
-	// 메시지 파싱
-	command := bytesToCommand(request[:commandLen])
-	payload := request[commandLen:]
+	command := bytesToCommand(req.Command)
+	payload := req.Payload
 
-	fmt.Printf("Received command: %s\n", command)
+	fmt.Printf("Received RPC command: %s\n", command)
 
 	var response RPCResponse
 
@@ -92,12 +83,9 @@ func (s *Server) handleRPCConnection(conn net.Conn) {
 		response = RPCResponse{Success: false, Message: "Unknown RPC command"}
 	}
 
-	var respBuff bytes.Buffer
-	if err := gob.NewEncoder(&respBuff).Encode(response); err != nil {
-		log.Panic(err)
+	if err := gob.NewEncoder(conn).Encode(response); err != nil {
+		log.Printf("Failed to send RPC response: %v\n", err)
 	}
-
-	conn.Write(respBuff.Bytes())
 }
 
 func (s *Server) rpcGetBalance(payload []byte) RPCResponse {
