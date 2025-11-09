@@ -1,9 +1,13 @@
 package core
 
 import (
+	"bytes"
+	"encoding/gob"
 	"flag"
 	"fmt"
+	"io"
 	"log"
+	"net"
 	"os"
 
 	"github.com/mr-tron/base58"
@@ -15,13 +19,11 @@ type CLI struct{}
 
 func (cli *CLI) printUsage() {
 	fmt.Println("Usage:")
-	fmt.Println("  createblockchain -address ADDRESS - Create a blockchain")
+	fmt.Println("  startnode -port PORT - Start a node")
 	fmt.Println("  createwallet - Gerenates a new key-pair and saves it into the wallet file")
 	fmt.Println("  getbalance -address ADDRESS - Get balance of ADDRESS")
 	fmt.Println("  reindexutxo - Rebuilds the UTXO set")
 	fmt.Println("  send -from FROM -to TO -amount AMOUNT - Send AMOUNT of coins")
-	fmt.Println("  startnode -port PORT - Start a node")
-	fmt.Println("  (추가 예정) printchain - Print all the blocks of the blockchain")
 }
 
 func (cli *CLI) validateArgs() {
@@ -35,29 +37,25 @@ func (cli *CLI) Run() {
 	cli.validateArgs()
 
 	// 명령어 플래그
-	createblockchainCmd := flag.NewFlagSet("createblockchain", flag.ExitOnError)
 	getBalanceCmd := flag.NewFlagSet("getbalance", flag.ExitOnError)
-	reindexCmd := flag.NewFlagSet("reindexutxo", flag.ExitOnError)
-	createWalletCmd := flag.NewFlagSet("createwallet", flag.ExitOnError)
-	sendCmd := flag.NewFlagSet("send", flag.ExitOnError)
-	startnodeCmd := flag.NewFlagSet("startnode", flag.ExitOnError)
-
-	// getbalance 명령어의 하위 옵션
 	getBalanceAddress := getBalanceCmd.String("address", "", "The address to get balance for")
 	getBalancePort := getBalanceCmd.String("port", defaultPort, "Node port")
 
-	createWalletPort := createWalletCmd.String("port", defaultPort, "Node port")
-
+	reindexCmd := flag.NewFlagSet("reindexutxo", flag.ExitOnError)
 	reindexPort := reindexCmd.String("port", defaultPort, "Node port")
 
-	// send 명령어의 하위 옵션
+	createWalletCmd := flag.NewFlagSet("createwallet", flag.ExitOnError)
+	createWalletPort := createWalletCmd.String("port", defaultPort, "Node port")
+
+	sendCmd := flag.NewFlagSet("send", flag.ExitOnError)
 	sendFrom := sendCmd.String("from", "", "Source wallet address")
 	sendTo := sendCmd.String("to", "", "Destination wallet address")
 	sendAmount := sendCmd.Int("amount", 0, "Amount to send")
 	sendPort := sendCmd.String("port", defaultPort, "Node port")
 
-	// startnode 명령어의 하위 옵션
+	startnodeCmd := flag.NewFlagSet("startnode", flag.ExitOnError)
 	startnodePort := startnodeCmd.String("port", defaultPort, "Node port to listen on")
+	startnodeMiner := startnodeCmd.String("miner", "", "Minig reward address (optional)")
 
 	// 명령어 파싱
 	// os.Args[1]	: 명령어
@@ -71,11 +69,6 @@ func (cli *CLI) Run() {
 		}
 	case "send":
 		err := sendCmd.Parse(os.Args[2:])
-		if err != nil {
-			log.Panic(err)
-		}
-	case "createblockchain":
-		err := createblockchainCmd.Parse(os.Args[2:])
 		if err != nil {
 			log.Panic(err)
 		}
@@ -106,79 +99,67 @@ func (cli *CLI) Run() {
 			os.Exit(1)
 		}
 
-		bc := NewBlockchain(*startnodePort)
-		defer bc.Close()
-
-		StartServer(*startnodePort, bc)
+		server := NewServer(*startnodePort, *startnodeMiner)
+		server.Start()
 	}
 
-	// send 명령어 실행 로직
-	if sendCmd.Parsed() {
-		if *sendFrom == "" || *sendTo == "" || *sendAmount <= 0 {
-			sendCmd.Usage()
-			os.Exit(1)
-		}
-
-		// 주소 유효성 검사
-		if !ValidateAddress(*sendFrom) || !ValidateAddress(*sendTo) {
-			log.Panic("ERROR: Addresses are not valid")
-		}
-
-		bc := NewBlockchain(*sendPort)
-		if bc == nil {
-			log.Panic("No blockchain found. Create one first.")
-		}
-		defer bc.Close()
-
-		// 트랜잭션 생성 및 서명
-		tx, err := bc.NewTransaction(*sendFrom, *sendTo, *sendPort, *sendAmount)
-		if err != nil {
-			log.Panic(err)
-		}
-
-		lastHash, lastHeight := bc.GetTipInfo()
-		block := NewBlock(
-			[]*Transaction{tx},
-			lastHash,
-			lastHeight+1,
-		)
-		pow := NewProofOfWork(block)
-		nonce, hash := pow.Run()
-		block.Hash = hash
-		block.Nonce = nonce
-
-		// 새 블록에 트랜잭션 추가
-		// 실제로는 Mempool에 추가되어야 하지만, 지금은 send가 즉시 새 블록을 채굴하도록 설정
-		bc.AddBlock(block)
-
-		fmt.Println("Transaction sent and mined successfully!")
-	}
-
-	// getbalance 명령어 실행 로직
+	// (getbalance - RPC 클라이언트)
 	if getBalanceCmd.Parsed() {
-		if *getBalanceAddress == "" {
+		if *getBalanceAddress == "" || *getBalancePort == "" {
 			getBalanceCmd.Usage()
 			os.Exit(1)
 		}
 
-		// 주소 유효성 검사
-		if !ValidateAddress(*getBalanceAddress) {
-			log.Panic("ERROR: Address is not valid")
+		req := GetBalanceRequest{Address: *getBalanceAddress}
+		resp, err := sendRPCRequest(*getBalancePort, rpcCmdGetBalance, req)
+		if err != nil {
+			log.Panic(err)
+		}
+		if !resp.Success {
+			log.Panic(fmt.Errorf("GetBalance failed: %s", resp.Message))
 		}
 
-		// PubKeyHash 추출
-		pubKeyHash := Base58Decode([]byte(*getBalanceAddress))
-		pubKeyHash = pubKeyHash[1 : len(pubKeyHash)-addressChecksumLen]
+		// 응답 페이로드 디코딩
+		var balanceResp GetBalanceResponse
+		if err := gob.NewDecoder(bytes.NewBuffer(resp.Data)).Decode(&balanceResp); err != nil {
+			log.Panic(err)
+		}
+		fmt.Printf("Balance for '%s' (via node %s): %d\n", *getBalanceAddress, *getBalancePort, balanceResp.Balance)
+	}
 
-		// 블록체인 로드
-		bc := NewBlockchain(*getBalancePort) // 이제 NewBlockchain은 주소가 필요 없음 (CLI가 생성하므로)
-		defer bc.Close()
+	// (createwallet - 로컬 실행, RPC 불필요)
+	if createWalletCmd.Parsed() {
+		if *createWalletPort == "" {
+			createWalletCmd.Usage()
+			os.Exit(1)
+		}
+		wallets, _ := NewWallets(*createWalletPort)
+		address := wallets.CreateWallet()
+		wallets.SaveToFile(*createWalletPort)
+		fmt.Printf("Wallet for node %s created. Address: %s\n", *createWalletPort, address)
+	}
 
-		// UTXOSet 생성 및 잔액 조회
-		utxoSet := UTXOSet{bc}
-		balance := utxoSet.GetBalance(pubKeyHash)
+	// (send - RPC 클라이언트)
+	if sendCmd.Parsed() {
+		if *sendFrom == "" || *sendTo == "" || *sendAmount <= 0 || *sendPort == "" {
+			sendCmd.Usage()
+			os.Exit(1)
+		}
 
-		fmt.Printf("Balance of %s : %d\n", *getBalanceAddress, balance)
+		// (주소 유효성 검사는 서버가 하지만, 클라도 미리 하는 것이 좋음)
+		if !ValidateAddress(*sendFrom) || !ValidateAddress(*sendTo) {
+			log.Panic("ERROR: Addresses are not valid")
+		}
+
+		req := SendRequest{From: *sendFrom, To: *sendTo, Amount: *sendAmount}
+		resp, err := sendRPCRequest(*sendPort, rpcCmdSend, req)
+		if err != nil {
+			log.Panic(err)
+		}
+		if !resp.Success {
+			log.Panic(fmt.Errorf("Send failed: %s", resp.Message))
+		}
+		fmt.Println("Send successful:", resp.Message)
 	}
 
 	// reindexutxo 명령어 실행 로직
@@ -207,4 +188,48 @@ func Base58Decode(input []byte) []byte {
 		log.Panic(err)
 	}
 	return decode
+}
+
+func sendRPCRequest(port string, cmd string, payload interface{}) (RPCResponse, error) {
+	rpcPort := fmt.Sprintf("localhost:%d", safeStringToInt(port)+rpcPortOffset)
+
+	conn, err := net.Dial(protocol, rpcPort)
+	if err != nil {
+		return RPCResponse{Success: false}, fmt.Errorf("Node at port %s is not running (RPC connection failed: %v)", port, err)
+	}
+	defer conn.Close()
+
+	// 1. 요청 생성
+	req := RPCRequest{
+		Command: commandToBytes(cmd),
+		Payload: gobEncode(payload),
+	}
+
+	// 2. 요청 직렬화 및 전송
+	var reqBuff bytes.Buffer
+	if err := gob.NewEncoder(&reqBuff).Encode(req); err != nil {
+		return RPCResponse{Success: false}, err
+	}
+	if _, err := io.Copy(conn, &reqBuff); err != nil {
+		return RPCResponse{Success: false}, err
+	}
+
+	// 3. 응답 수신
+	// (단순화를 위해, 서버가 응답을 닫을 때까지 읽음)
+	respBytes, err := io.ReadAll(conn)
+	if err != nil {
+		return RPCResponse{Success: false}, fmt.Errorf("Failed to read RPC response: %v", err)
+	}
+
+	if len(respBytes) == 0 {
+		return RPCResponse{Success: false}, fmt.Errorf("Received empty RPC response from node %s", port)
+	}
+
+	// 4. 응답 역직렬화
+	var resp RPCResponse
+	if err := gob.NewDecoder(bytes.NewReader(respBytes)).Decode(&resp); err != nil {
+		return RPCResponse{Success: false}, fmt.Errorf("Failed to decode RPC response: %v", err)
+	}
+
+	return resp, nil
 }

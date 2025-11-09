@@ -72,8 +72,9 @@ func (ws *Wallets) CreateWallet() string {
 }
 
 // 주소로 지갑 찾기
-func (ws *Wallets) GetWallet(address string) Wallet {
-	return *ws.Wallets[address]
+func (ws *Wallets) GetWallet(address string) (*Wallet, bool) {
+	wallet, ok := ws.Wallets[address]
+	return wallet, ok
 }
 
 // 지갑 맵을 파일에 GOB으로 저장(Save)

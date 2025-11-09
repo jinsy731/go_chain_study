@@ -38,6 +38,7 @@ func createGenesisBlock() *Block {
 		Transactions:  []*Transaction{cbtx},
 		PrevBlockHash: []byte{},
 		Nonce:         genesisNonce,
+		Height:        1,
 		// Hash: (hex 디코딩 필요)
 	}
 	genesis.Hash, _ = hex.DecodeString(genesisHash)
@@ -210,13 +211,7 @@ func (bc *Blockchain) FindAllUTXO() map[string][]*TXOutput {
 	return UTXO
 }
 
-func (bc *Blockchain) NewTransaction(from, to, port string, amount int) (*Transaction, error) {
-	// from 지갑 로드 (서명을 하기 위해)
-	wallets, err := NewWallets(port)
-	if err != nil {
-		log.Panic(err)
-	}
-	wallet := wallets.GetWallet(from)
+func (bc *Blockchain) NewTransaction(wallet *Wallet, to string, amount int) (*Transaction, error) {
 	pubKeyHash := HashPubKey(wallet.PublicKey)
 
 	// 사용할 수 있는 UTXO 찾기
@@ -249,7 +244,7 @@ func (bc *Blockchain) NewTransaction(from, to, port string, amount int) (*Transa
 	outputs = append(outputs, NewTXOutput(amount, to))
 	// 거스름돈
 	if accumulated > amount {
-		outputs = append(outputs, NewTXOutput(accumulated-amount, from))
+		outputs = append(outputs, NewTXOutput(accumulated-amount, string(wallet.GetAddress())))
 	}
 
 	// 트랜잭션 생성
@@ -317,7 +312,8 @@ func (bc *Blockchain) GetBestHeight() int64 {
 		if lastHash == nil {
 			return fmt.Errorf("Tip hash not found")
 		}
-		lastBlock = DeserializeBlock(lastHash)
+		lastBlockBytes := b.Get(lastHash)
+		lastBlock = DeserializeBlock(lastBlockBytes)
 
 		return nil
 	})
@@ -360,6 +356,26 @@ func (bc *Blockchain) GetTipInfo() ([]byte, int64) {
 	}
 
 	return lastBlock.Hash, lastBlock.Height
+}
+
+func (bc *Blockchain) GetBlock(ID []byte) (*Block, error) {
+	var blockBytes []byte
+
+	err := bc.db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(blocksBucket))
+		blockBytes = b.Get(ID)
+
+		if blockBytes == nil {
+			return fmt.Errorf("Block %s not found.", ID)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return DeserializeBlock(blockBytes), nil
 }
 
 // DB 연결 종료
